@@ -1,0 +1,55 @@
+.DS_Store
+__pycache__
+archive
+.pyc
+.idea
+__pyache__/
+dist/
+~$*
+.ipynb_checkpoints
+demo.py
+work_list.txt
+logs
+config
+doc
+#data
+data/mode/backup
+data/align
+# 配置文件
+
+feature_importance.csv
+
+# 权重文件
+model
+接口测试.txt
+backup
+test
+verssion
+
+# 无用的本地文件
+*.zip
+实验记录*
+*tmp*
+样本信息.txt
+试验记录.txt
+为0.txt
+commercial_product_set_1125.pkl
+data/*txt
+data/*csv
+data/mode_*
+data/mode
+checkpoint
+seeding
+output
+mmbt_example
+log
+image
+runs
+cache
+*.ipynb
+# 一些没用的脚本
+shiping_test_ids.py
+seeding_preprd.py
+
+# 待优化的脚本
+seeding_down_old.py
