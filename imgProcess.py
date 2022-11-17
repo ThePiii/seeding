@@ -1,6 +1,6 @@
 from torch.nn import functional as F
-from seeding.ops.models2 import TSN
-from seeding.ops.transforms import *
+from ops.models2 import TSN
+from ops.transforms import *
 
 
 class ImageProcess():

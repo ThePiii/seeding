@@ -18,7 +18,6 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
-from mmbt_example.utils_mmimdb import ImageEncoder, get_image_transforms
 import torchvision.transforms as transforms
 import torchvision
 from collections import Counter
