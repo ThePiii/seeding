@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
-from transformers import BertTokenizerFast, BertModel, AdamW, get_linear_schedule_with_warmup, ErnieModel
+from transformers import BertTokenizer, BertModel, AdamW, get_linear_schedule_with_warmup
 import os
 import time
 from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score
@@ -68,21 +68,20 @@ def data_loader(df, tokenizer, max_len, batch_size):
 class BertClassifier(nn.Module):
     def __init__(self, n_classes):
         super(BertClassifier, self).__init__()
-        self.bert = ErnieModel.from_pretrained("nghuyong/ernie-3.0-base-zh",
-                                                     return_dict=False, cache_dir='cache')  # 不加return_dict=False的话，pooled_output返回的是str
+        self.bert = BertModel.from_pretrained("hfl/chinese-xlnet-base",
+                                              return_dict=False,
+                                              cache_dir='cache')  # 不加return_dict=False的话，pooled_output返回的是str
         self.drop = nn.Dropout(p=0.3)
-        self.out = nn.Linear((self.bert.config.hidden_size)//2, n_classes)  # hidden_size = 768
-        self.linear = nn.Linear(self.bert.config.hidden_size, (self.bert.config.hidden_size)//2)
+        self.out = nn.Linear(self.bert.config.hidden_size, n_classes)  # hidden_size = 768
 
     def forward(self, input_ids, attention_mask):
-        with torch.no_grad():
-            _, pooled_output = self.bert(
-                input_ids=input_ids,
-                attention_mask=attention_mask
-            )
-        output = self.drop(pooled_output)
-        output = self.linear(output)
-        output = self.drop(output)
+        # with torch.no_grad():
+        # 微调Bert
+        _, pooled_output = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask
+        )
+        output = self.drop(pooled_output).to(device)
         return self.out(output)
 
 
@@ -103,8 +102,8 @@ def train_epoch(model, data_loader, loss_fn, optimizer, scheduler, n_examples):
         prob = F.softmax(outputs, dim=1)
         _, preds = torch.max(outputs, dim=1)
         loss = loss_fn(outputs, targets).to(device)
-        
-        prob_all.extend(prob[:,1].cpu().numpy()) 
+
+        prob_all.extend(prob[:, 1].cpu().numpy())
         label_all.extend(targets.cpu().numpy())
         correct_pred += torch.sum(preds == targets)
         losses.append(loss.item())
@@ -116,8 +115,8 @@ def train_epoch(model, data_loader, loss_fn, optimizer, scheduler, n_examples):
         optimizer.step()
         scheduler.step()
         optimizer.zero_grad()
-    
-    auc = roc_auc_score(label_all,prob_all)
+
+    auc = roc_auc_score(label_all, prob_all)
     logger.append("AUC:{:.4f}".format(auc))
 
     return correct_pred.double() / n_examples, np.mean(losses), auc
@@ -185,7 +184,7 @@ def get_predictions(model, data_loader):
 if __name__ == '__main__':
     # 训练太慢了，先抽样训练
 
-    tokenizer = BertTokenizerFast.from_pretrained("nghuyong/ernie-3.0-base-zh", cache_dir='cache')
+    tokenizer = BertTokenizer.from_pretrained("hfl/chinese-xlnet-base", cache_dir='cache')
     batch_size = 16
     max_len = 256
     EPOCHS = 10
@@ -238,11 +237,11 @@ if __name__ == '__main__':
                 torch.save(model.state_dict(), f'./model/ERNIE.pth')
                 best_auc = train_auc
 
-    # if test:
-    #     for epoch in range(EPOCHS):
-    #         model = BertClassifier(2).to(device)
-    #         model.load_state_dict(torch.load(f'./model/Bert-base/ERNIE_{epoch}.pth'))
-            logger.append('----- test -----')
+            # if test:
+            #     for epoch in range(EPOCHS):
+            #         model = BertClassifier(2).to(device)
+            #         model.load_state_dict(torch.load(f'./model/Bert-base/ERNIE_{epoch}.pth'))
+
             df_test = pd.read_csv('./data/test.csv', lineterminator='\n').sample(50)
             test_data_loader = data_loader(df_test, tokenizer, max_len, batch_size)
 
@@ -250,10 +249,10 @@ if __name__ == '__main__':
 
             y_pred = y_pred.cpu()
             y_test = y_test.cpu()
-            y_pred_probs = y_pred_probs[:,1].cpu()
-            
+            y_pred_probs = y_pred_probs[:, 1].cpu()
+
             logger.append("AUC:{:.4f}".format(roc_auc_score(y_test, y_pred_probs)))
-            
+
             logger.append(classification_report(y_test, y_pred))
 
             cm = confusion_matrix(y_test, y_pred)

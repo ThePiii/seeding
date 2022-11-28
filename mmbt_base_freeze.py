@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import torch
-from sklearn.metrics import f1_score, classification_report
+from sklearn.metrics import f1_score, classification_report, roc_auc_score
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm, trange
@@ -257,17 +257,20 @@ def evaluate(model, eval_dataset, criterion, prefix=""):
             # preds = torch.sigmoid(logits).detach().cpu().numpy() > 0.5
             _, preds = torch.max(logits, dim=1)  # torch.max(a,1) 返回每一行中最大值的那个元素，且返回其索引（返回最大元素在这一行的列索引）
             preds = preds.detach().cpu().numpy()
+            proba = torch.sigmoid(logits).detach().cpu().numpy()
             out_label_ids = labels.detach().cpu().numpy()
         else:
             # preds = np.append(preds, torch.sigmoid(logits).detach().cpu().numpy() > 0.5, axis=0)
             _, temp_preds = torch.max(logits, dim=1)
             preds = np.append(preds, temp_preds.detach().cpu().numpy())
+            proba = np.append(proba, torch.sigmoid(logits).detach().cpu().numpy(), axis=0)
             out_label_ids = np.append(out_label_ids, labels.detach().cpu().numpy(), axis=0)
         eval_loss = eval_loss / nb_eval_steps
 
     result = {
         "loss": eval_loss,
         "micro_f1": f1_score(out_label_ids, preds, average="micro"),
+        "AUC": roc_auc_score(out_label_ids, torch.sigmoid(logits).detach().cpu().numpy()),
     }
     logger.append(classification_report(out_label_ids, preds, digits=4))
     return result
@@ -324,7 +327,7 @@ def train(train_dataset, evaluate_dataset, model, criterion, EPOCHS, lr):
             global_step += 1
 
             # 定期记录日志
-            logging_steps = 100
+            logging_steps = 1000
             if global_step % logging_steps == 0:
                 logs = {}
                 results = evaluate(model, evaluate_dataset, criterion)
@@ -343,16 +346,16 @@ def train(train_dataset, evaluate_dataset, model, criterion, EPOCHS, lr):
                 logger.append(json.dumps({**logs, **{"step": global_step}}))
 
             # 定期保存模型以防万一
-            save_steps = 1000
-            if global_step % save_steps == 0:
-                output_dir = os.path.join('model', "checkpoint-{}".format(global_step))
-                if not os.path.exists(output_dir):
-                    os.makedirs(output_dir)
-                model_to_save = (
-                    model.module if hasattr(model, "module") else model
-                )  # Take care of distributed/parallel training
-                torch.save(model_to_save.state_dict(), os.path.join(output_dir, 'mmbt_base.pth'))
-                logger.append("Saving model checkpoint to {}".format(output_dir))
+            # save_steps = 1000
+            # if global_step % save_steps == 0:
+            #     output_dir = os.path.join('model', "checkpoint-{}".format(global_step))
+            #     if not os.path.exists(output_dir):
+            #         os.makedirs(output_dir)
+            #     model_to_save = (
+            #         model.module if hasattr(model, "module") else model
+            #     )  # Take care of distributed/parallel training
+            #     torch.save(model_to_save.state_dict(), os.path.join(output_dir, 'mmbt_base.pth'))
+            #     logger.append("Saving model checkpoint to {}".format(output_dir))
 
         # 每轮迭代后，evaluate，并保存模型
         torch.save(model.state_dict(), os.path.join('model', f'mmbt_base_freeze_{_}.pth'))

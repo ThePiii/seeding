@@ -21,7 +21,7 @@ import torchvision.transforms as transforms
 import torchvision
 from collections import Counter
 from torch.utils.data import Dataset
-import pandas as pd 
+import pandas as pd
 from utils import url_to_pilimg_train, Logger
 import warnings
 
@@ -29,8 +29,7 @@ warnings.filterwarnings("ignore")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 POOLING_BREAKDOWN = {1: (1, 1), 2: (2, 1), 3: (3, 1), 4: (2, 2), 5: (5, 1), 6: (3, 2), 7: (7, 1), 8: (4, 2), 9: (3, 3)}
 
-
-logger = Logger(f'logs/mmbt_base.log', resume=True)  # 记录训练和测试结果的日志，保存在实验目录下
+logger = Logger(f'logs/mmbt_base_modify.log', resume=True)  # 记录训练和测试结果的日志，保存在实验目录下
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -115,7 +114,7 @@ class JsonlDataset(Dataset):
         label_freqs = Counter()
         d = self.data.to_dict('records')
         for row in d:
-            label_freqs.update(str(row["is_commercial"]))   # 转为一个列表，列表内每个元素为字典，与源代码中数据格式一致
+            label_freqs.update(str(row["is_commercial"]))  # 转为一个列表，列表内每个元素为字典，与源代码中数据格式一致
         return label_freqs
 
 
@@ -168,7 +167,7 @@ def evaluate(model, eval_dataset, criterion, prefix=""):
     nb_eval_steps = 0
     preds = None
     out_label_ids = None
-    
+
     for batch in tqdm(eval_dataloader, desc="Evaluating"):  # tqdm用于可视化展示进度
         model.eval()
         batch = tuple(t.to('cuda') for t in batch)
@@ -190,21 +189,23 @@ def evaluate(model, eval_dataset, criterion, prefix=""):
             eval_loss += tmp_eval_loss.mean().item()
         nb_eval_steps += 1
         if preds is None:
-            # preds = torch.sigmoid(logits).detach().cpu().numpy() > 0.5
-            _, preds = torch.max(logits, dim=1)  # torch.max(a,1) 返回每一行中最大值的那个元素，且返回其索引（返回最大元素在这一行的列索引）
-            preds = preds.detach().cpu().numpy()
+            preds = torch.sigmoid(logits).detach().cpu().numpy() > 0.5
+            # _, preds = torch.max(logits, dim=1)  # torch.max(a,1) 返回每一行中最大值的那个元素，且返回其索引（返回最大元素在这一行的列索引）
+            # preds = preds.detach().cpu().numpy()
+            proba = torch.sigmoid(logits).detach().cpu().numpy()
             out_label_ids = labels.detach().cpu().numpy()
         else:
-            # preds = np.append(preds, torch.sigmoid(logits).detach().cpu().numpy() > 0.5, axis=0)
-            _, temp_preds = torch.max(logits, dim=1)
-            preds = np.append(preds, temp_preds.detach().cpu().numpy())
+            preds = np.append(preds, torch.sigmoid(logits).detach().cpu().numpy() > 0.5, axis=0)
+            # _, temp_preds = torch.max(logits, dim=1)
+            # preds = np.append(preds, temp_preds.detach().cpu().numpy())
+            proba = np.append(proba, torch.sigmoid(logits).detach().cpu().numpy(), axis=0)
             out_label_ids = np.append(out_label_ids, labels.detach().cpu().numpy(), axis=0)
         eval_loss = eval_loss / nb_eval_steps
 
     result = {
         "loss": eval_loss,
         "micro_f1": f1_score(out_label_ids, preds, average="micro"),
-        "AUC": roc_auc_score(out_label_ids, torch.sigmoid(logits).detach().cpu().numpy()),
+        "AUC": roc_auc_score(out_label_ids, proba),
     }
     logger.append(classification_report(out_label_ids, preds, digits=4))
     return result
@@ -218,9 +219,9 @@ def train(train_dataset, evaluate_dataset, model, criterion, EPOCHS, lr):
 
     tb_writer = SummaryWriter('./logs')
 
-    train_data_loader = DataLoader(train_dataset, 
-                                   batch_size=batch_size, 
-                                   collate_fn=collate_fn, 
+    train_data_loader = DataLoader(train_dataset,
+                                   batch_size=batch_size,
+                                   collate_fn=collate_fn,
                                    num_workers=2,
                                    shuffle=True)
 
@@ -229,17 +230,17 @@ def train(train_dataset, evaluate_dataset, model, criterion, EPOCHS, lr):
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=10, num_training_steps=total_steps
     )
-    
+
     global_step = 0
     tr_loss, logging_loss = 0.0, 0.0
     best_f1, n_no_improve = 0, 0
     model.zero_grad()
     train_iterator = trange(int(EPOCHS), desc="Epoch")
-    
+
     for _ in train_iterator:
         epoch_iterator = tqdm(train_data_loader, desc="Iteration")
         for step, batch in enumerate(epoch_iterator):
-            model.train() 
+            model.train()
             batch = tuple(t.to('cuda') for t in batch)
             labels = batch[5]
             inputs = {
@@ -252,6 +253,8 @@ def train(train_dataset, evaluate_dataset, model, criterion, EPOCHS, lr):
             }
             outputs = model(**inputs)
             logits = outputs[0]  # model outputs are always tuple in transformers (see doc)
+            # logits = logits.flatten()
+            labels = labels.reshape(batch_size, 1)
             loss = criterion(logits, labels)
             loss.backward()
             tr_loss += loss.item()
@@ -261,7 +264,7 @@ def train(train_dataset, evaluate_dataset, model, criterion, EPOCHS, lr):
             global_step += 1
 
             # 定期记录日志
-            logging_steps = 100
+            logging_steps = 1000
             if global_step % logging_steps == 0:
                 logs = {}
                 results = evaluate(model, evaluate_dataset, criterion)
@@ -280,19 +283,19 @@ def train(train_dataset, evaluate_dataset, model, criterion, EPOCHS, lr):
                 logger.append(json.dumps({**logs, **{"step": global_step}}))
 
             # 定期保存模型以防万一
-            save_steps = 1000
-            if global_step % save_steps == 0:
-                output_dir = os.path.join('model', "checkpoint-{}".format(global_step))
-                if not os.path.exists(output_dir):
-                    os.makedirs(output_dir)
-                model_to_save = (
-                    model.module if hasattr(model, "module") else model
-                )  # Take care of distributed/parallel training
-                torch.save(model_to_save.state_dict(), os.path.join(output_dir, 'mmbt_base.pth'))
-                logger.append("Saving model checkpoint to {}".format(output_dir))
+            # save_steps = 1000
+            # if global_step % save_steps == 0:
+            #     output_dir = os.path.join('model', "checkpoint-{}".format(global_step))
+            #     if not os.path.exists(output_dir):
+            #         os.makedirs(output_dir)
+            #     model_to_save = (
+            #         model.module if hasattr(model, "module") else model
+            #     )  # Take care of distributed/parallel training
+            #     torch.save(model_to_save.state_dict(), os.path.join(output_dir, 'mmbt_base.pth'))
+            #     logger.append("Saving model checkpoint to {}".format(output_dir))
 
         # 每轮迭代后，evaluate，并保存模型
-        torch.save(model.state_dict(), os.path.join('model', f'mmbt_base_{_}.pth'))
+        torch.save(model.state_dict(), os.path.join('model', f'mmbt_base_modify_{_}.pth'))
         results = evaluate(model, evaluate_dataset, criterion)
 
         if results["micro_f1"] > best_f1:
@@ -313,10 +316,9 @@ def train(train_dataset, evaluate_dataset, model, criterion, EPOCHS, lr):
 
 
 def main():
-
     cache_dir = 'cache'
     config = AutoConfig.from_pretrained('bert-base-chinese', cache_dir=cache_dir)
-    mmbt_config = MMBTConfig(config, num_labels=2)
+    mmbt_config = MMBTConfig(config, num_labels=1)
     tokenizer = AutoTokenizer.from_pretrained('bert-base-chinese', cache_dir=cache_dir)
     transformer = AutoModel.from_pretrained('bert-base-chinese', cache_dir=cache_dir)
 
@@ -327,19 +329,20 @@ def main():
 
     model = MMBTForClassification(mmbt_config, transformer, img_encoder)
     model = model.to('cuda')
-    
-    data_path = './data/train_5w.csv'
+
+    data_path = './data/train.csv'
     # 先抽样1000条跑通
     train_dataset = load_examples(data_path, tokenizer)
     #
     eval_path = './data/test.csv'
     eval_dataset = load_examples(eval_path, tokenizer)
 
-    criterion = nn.CrossEntropyLoss()
-    
+    # criterion = nn.CrossEntropyLoss()
+    criterion = nn.BCEWithLogitsLoss()
+
     EPOCHS = 10
 
-    lr = 2e-5
+    lr = 5e-5
 
     global_step, tr_loss = train(train_dataset, eval_dataset, model, criterion, EPOCHS, lr)
     logger.append(f" global_step = {global_step}, average loss = {tr_loss}")
@@ -359,5 +362,4 @@ def main():
 
 
 if __name__ == '__main__':
-
     main()

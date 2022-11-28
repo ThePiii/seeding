@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
-from transformers import BertTokenizerFast, BertModel, AdamW, get_linear_schedule_with_warmup, ErnieModel
+from transformers import BertTokenizer, AdamW, get_linear_schedule_with_warmup, ErnieModel
 import os
 import time
 from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score
@@ -71,18 +71,16 @@ class BertClassifier(nn.Module):
         self.bert = ErnieModel.from_pretrained("nghuyong/ernie-3.0-base-zh",
                                                      return_dict=False, cache_dir='cache')  # 不加return_dict=False的话，pooled_output返回的是str
         self.drop = nn.Dropout(p=0.3)
-        self.out = nn.Linear((self.bert.config.hidden_size)//2, n_classes)  # hidden_size = 768
-        self.linear = nn.Linear(self.bert.config.hidden_size, (self.bert.config.hidden_size)//2)
+        self.out = nn.Linear(self.bert.config.hidden_size, n_classes)  # hidden_size = 768
 
     def forward(self, input_ids, attention_mask):
-        with torch.no_grad():
-            _, pooled_output = self.bert(
-                input_ids=input_ids,
-                attention_mask=attention_mask
-            )
-        output = self.drop(pooled_output)
-        output = self.linear(output)
-        output = self.drop(output)
+        # with torch.no_grad():
+        # 微调Bert
+        _, pooled_output = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask
+        )
+        output = self.drop(pooled_output).to(device)
         return self.out(output)
 
 
@@ -185,7 +183,7 @@ def get_predictions(model, data_loader):
 if __name__ == '__main__':
     # 训练太慢了，先抽样训练
 
-    tokenizer = BertTokenizerFast.from_pretrained("nghuyong/ernie-3.0-base-zh", cache_dir='cache')
+    tokenizer = BertTokenizer.from_pretrained("nghuyong/ernie-3.0-base-zh", cache_dir='cache')
     batch_size = 16
     max_len = 256
     EPOCHS = 10
@@ -242,7 +240,7 @@ if __name__ == '__main__':
     #     for epoch in range(EPOCHS):
     #         model = BertClassifier(2).to(device)
     #         model.load_state_dict(torch.load(f'./model/Bert-base/ERNIE_{epoch}.pth'))
-            logger.append('----- test -----')
+    
             df_test = pd.read_csv('./data/test.csv', lineterminator='\n').sample(50)
             test_data_loader = data_loader(df_test, tokenizer, max_len, batch_size)
 
