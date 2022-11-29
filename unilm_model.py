@@ -76,10 +76,13 @@ class BertClassifier(nn.Module):
     def forward(self, input_ids, attention_mask):
         # with torch.no_grad():
         # 微调Bert
-        _, pooled_output = self.bert(
+        seq, pooled_output = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask
         )
+        if False:
+            pooled_output = torch.stack([seq[:, 0, :], seq[:, -1, :]]).mean(0).shape
+
         output = self.drop(pooled_output).to(device)
         return self.out(output)
 
@@ -102,7 +105,7 @@ def train_epoch(model, data_loader, loss_fn, optimizer, scheduler, n_examples):
         _, preds = torch.max(outputs, dim=1)
         loss = loss_fn(outputs, targets).to(device)
         
-        prob_all.extend(prob[:,1].cpu().numpy()) 
+        prob_all.extend(prob[:, 1].detach().cpu().numpy())
         label_all.extend(targets.cpu().numpy())
         correct_pred += torch.sum(preds == targets)
         losses.append(loss.item())
@@ -202,7 +205,7 @@ if __name__ == '__main__':
 
         model = BertClassifier(2).to(device)
 
-        optimizer = AdamW(model.parameters(), lr=5e-5, correct_bias=False)
+        optimizer = AdamW(model.parameters(), lr=2e-5, correct_bias=False)
         total_steps = len(train_data_loader) * EPOCHS
         scheduler = get_linear_schedule_with_warmup(
             optimizer,

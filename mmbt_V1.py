@@ -371,7 +371,7 @@ def main():
 
     EPOCHS = 10
 
-    lr = 5e-5
+    lr = 2e-5
 
     global_step, tr_loss = train(train_dataset, eval_dataset, model, criterion, EPOCHS, lr)
     logger.append(f" global_step = {global_step}, average loss = {tr_loss}")

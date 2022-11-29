@@ -204,7 +204,7 @@ if __name__ == '__main__':
 
         model = BertClassifier(2).to(device)
 
-        optimizer = AdamW(model.parameters(), lr=5e-5, correct_bias=False)
+        optimizer = AdamW(model.parameters(), lr=2e-5, correct_bias=False)
         total_steps = len(train_data_loader) * EPOCHS
         scheduler = get_linear_schedule_with_warmup(
             optimizer,

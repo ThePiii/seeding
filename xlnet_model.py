@@ -12,7 +12,7 @@ from utils import Logger
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # 3.x更新到4以后，不false会有一直有个log，不方便看输出
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-logger = Logger(f'logs/ERNIE.log', resume=True)
+logger = Logger(f'logs/XLNet.log', resume=True)
 
 
 class bert_dataset(Dataset):
@@ -103,7 +103,7 @@ def train_epoch(model, data_loader, loss_fn, optimizer, scheduler, n_examples):
         _, preds = torch.max(outputs, dim=1)
         loss = loss_fn(outputs, targets).to(device)
 
-        prob_all.extend(prob[:, 1].cpu().numpy())
+        prob_all.extend(prob[:, 1].detach().cpu().numpy())
         label_all.extend(targets.cpu().numpy())
         correct_pred += torch.sum(preds == targets)
         losses.append(loss.item())
@@ -184,7 +184,7 @@ def get_predictions(model, data_loader):
 if __name__ == '__main__':
     # 训练太慢了，先抽样训练
 
-    tokenizer = BertTokenizer.from_pretrained("hfl/chinese-xlnet-base", cache_dir='cache')
+    tokenizer = BertTokenizer.from_pretrained("bert-base-chinese", cache_dir='cache')
     batch_size = 16
     max_len = 256
     EPOCHS = 10
@@ -203,7 +203,7 @@ if __name__ == '__main__':
 
         model = BertClassifier(2).to(device)
 
-        optimizer = AdamW(model.parameters(), lr=5e-5, correct_bias=False)
+        optimizer = AdamW(model.parameters(), lr=2e-5, correct_bias=False)
         total_steps = len(train_data_loader) * EPOCHS
         scheduler = get_linear_schedule_with_warmup(
             optimizer,

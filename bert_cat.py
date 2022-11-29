@@ -7,7 +7,7 @@ import numpy as np
 from transformers import BertTokenizerFast, BertModel, AdamW, get_linear_schedule_with_warmup
 import os
 import time
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score
 # import torchvision.transforms as transforms
 import torchvision
 from utils import url_to_pilimg_train, Logger
@@ -25,26 +25,26 @@ img = ImageProcess()
 logger = Logger(f'logs/bert_cat.log', resume=True)
 
 
-class ImageEncoder(nn.Module):
-    def __init__(self):
-        super().__init__()
-        model_path = r'D:\研究生\毕业论文\MMBT\cache\torch\hub\checkpoints\resnet152-394f9c45.pth'
-        if os.path.exists(model_path):
-            model = torchvision.models.resnet152(pretrained=False)
-            model.load_state_dict(torch.load(r'D:\研究生\毕业论文\MMBT\cache\torch\hub\checkpoints\resnet152-394f9c45.pth'))
-        else:
-            model = torchvision.models.resnet152(pretrained=True)
-        modules = list(model.children())[:-2]
-        self.model = nn.Sequential(*modules)
-        # self.pool = nn.AdaptiveAvgPool2d(POOLING_BREAKDOWN[1])
-
-    def forward(self, x):
-        # Bx3x224x224 -> Bx2048x7x7 -> Bx2048xN -> BxNx2048
-        # out = self.pool(self.model(x))
-        out = self.model(x)
-        out = torch.flatten(out, start_dim=2)
-        # out = out.transpose(1, 2).contiguous()
-        return out  # BxNx2048
+# class ImageEncoder(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#         model_path = r'D:\研究生\毕业论文\MMBT\cache\torch\hub\checkpoints\resnet152-394f9c45.pth'
+#         if os.path.exists(model_path):
+#             model = torchvision.models.resnet152(pretrained=False)
+#             model.load_state_dict(torch.load(r'D:\研究生\毕业论文\MMBT\cache\torch\hub\checkpoints\resnet152-394f9c45.pth'))
+#         else:
+#             model = torchvision.models.resnet50(pretrained=True)
+#         modules = list(model.children())[:-2]
+#         self.model = nn.Sequential(*modules)
+#         # self.pool = nn.AdaptiveAvgPool2d(POOLING_BREAKDOWN[1])
+#
+#     def forward(self, x):
+#         # Bx3x224x224 -> Bx2048x7x7 -> Bx2048xN -> BxNx2048
+#         # out = self.pool(self.model(x))
+#         out = self.model(x)
+#         out = torch.flatten(out, start_dim=2)
+#         # out = out.transpose(1, 2).contiguous()
+#         return out  # BxNx2048
 
 
 class bert_dataset(Dataset):
@@ -108,8 +108,8 @@ def data_loader(df, tokenizer, transform, max_len, batch_size):
 class BertClassifier(nn.Module):
     def __init__(self, n_classes):
         super(BertClassifier, self).__init__()
-        self.bert = BertModel.from_pretrained('bert-base-chinese',
-                                              return_dict=False, cache_dir='cache')  # 不加return_dict=False的话，pooled_output返回的是str
+        self.bert = BertModel.from_pretrained('hfl/chinese-xlnet-base',
+                                              return_dict=False, cache_dir='cache', output_hidden_states=True)  # 不加return_dict=False的话，pooled_output返回的是str
         self.drop = nn.Dropout(p=0.3)
         self.out = nn.Linear(self.bert.config.hidden_size +
                              768, n_classes)  # hidden_size = 768
@@ -119,10 +119,17 @@ class BertClassifier(nn.Module):
         # with torch.no_grad():
         # 微调Bert
         with torch.no_grad():
-            _, pooled_output = self.bert(
+            _, pooled_output, hidden = self.bert(
                 input_ids=input_ids,
                 attention_mask=attention_mask
             )
+        # first_last_avg
+        if True:
+            pooled_output = []
+            for i in range(2):
+                seq = hidden[-i]
+                pooled_output += [torch.mean(seq, dim=1, keepdim=True)]
+            pooled_output = torch.sum(torch.cat(pooled_output, dim=1), 1)
 
         image_feature = self.project(image)
         image_feature = image_feature.reshape(-1, 768)
@@ -137,7 +144,8 @@ def train_epoch(model, data_loader, loss_fn, optimizer, scheduler, n_examples):
     model.train()
     losses = []
     correct_pred = 0
-
+    prob_all = []
+    label_all = []
     for d in data_loader:
         input_ids = d['input_ids'].to(device)
         attention_mask = d['attention_mask'].to(device)
@@ -147,12 +155,15 @@ def train_epoch(model, data_loader, loss_fn, optimizer, scheduler, n_examples):
         outputs = model(input_ids=input_ids,
                         attention_mask=attention_mask, image=image).to(device)
 
+        prob = F.softmax(outputs, dim=1)
         _, preds = torch.max(outputs, dim=1)
         loss = loss_fn(outputs, targets).to(device)
 
+        label_all.extend(targets.cpu().numpy())
+        prob_all.extend(prob[:, 1].detach().cpu().numpy())
         correct_pred += torch.sum(preds == targets)
         losses.append(loss.item())
-        if len(losses) % 1000 == 0:
+        if len(losses) % 500 == 0:
             logger.append(f'当前batch的损失为：{loss.item()}')
 
         loss.backward()
@@ -161,7 +172,10 @@ def train_epoch(model, data_loader, loss_fn, optimizer, scheduler, n_examples):
         scheduler.step()
         optimizer.zero_grad()
 
-    return correct_pred.double() / n_examples, np.mean(losses)
+    auc = roc_auc_score(label_all, prob_all)
+    logger.append("AUC:{:.4f}".format(auc))
+
+    return correct_pred.double() / n_examples, np.mean(losses), auc
 
 
 def eval_model(model, data_loader, loss_fn, n_examples):
@@ -236,7 +250,7 @@ if __name__ == '__main__':
     train, test = True, True
     df_train = pd.read_csv('./data/train_5w.csv', lineterminator='\n')
     df_train = df_train.fillna('')
-    df_train = df_train.rename(columns={'trendImageUrl\r': 'trendImageUrl'})
+    # df_train = df_train.rename(columns={'trendImageUrl\r': 'trendImageUrl'})
     transform = get_image_transforms()
 
     if train:
@@ -260,7 +274,7 @@ if __name__ == '__main__':
             logger.append(f'Epoch {epoch + 1}/{EPOCHS}')
             logger.append('-' * 30)
 
-            train_acc, train_loss = train_epoch(
+            train_acc, train_loss, auc = train_epoch(
                 model,
                 train_data_loader,
                 loss_fn,
@@ -275,15 +289,15 @@ if __name__ == '__main__':
             logger.append("本轮训练时间{}".format(end - start))
 
             torch.save(model.state_dict(),
-                       f'./model/Bert-base/bert_base_{epoch}.pth')
+                       './model/bert_cat.pth')
             best_accuracy = train_acc
 
-    if test:
-        for epoch in range(EPOCHS):
-            model = BertClassifier(2).to(device)
-            model.load_state_dict(torch.load(
-                f'./model/Bert-base/bert_base_{epoch}.pth'))
-            df_test = pd.read_csv('./data/test.csv', lineterminator='\n')
+    # if test:
+    #     for epoch in range(EPOCHS):
+    #         model = BertClassifier(2).to(device)
+    #         model.load_state_dict(torch.load(
+    #             f'./model/Bert-base/bert_base_{epoch}.pth'))
+            df_test = pd.read_csv('./data/test_big.csv', lineterminator='\n')
             test_data_loader = data_loader(
                 df_test, tokenizer, transform, max_len, batch_size)
 
@@ -292,7 +306,10 @@ if __name__ == '__main__':
 
             y_pred = y_pred.cpu()
             y_test = y_test.cpu()
-            logger.append(classification_report(y_test, y_pred))
+            y_pred_probs = y_pred_probs[:, 1].cpu()
+
+            logger.append("Test_AUC:{:.4f}".format(roc_auc_score(y_test, y_pred_probs)))
+            logger.append(classification_report(y_test, y_pred, digits=4))
 
             cm = confusion_matrix(y_test, y_pred)
             class_names = ['0', '1']
